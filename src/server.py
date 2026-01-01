@@ -12,9 +12,8 @@ from mesa.visualization import SolaraViz, make_space_component, make_plot_compon
 from model import WarehouseModel
 from agents import RobotAgent, STATE_TO_DELIVER, STATE_TO_PICKUP, STATE_CHARGING, STATE_TO_CHARGE, LOW_BATTERY_THRESHOLD
 
-# ==========================================
+
 # VISUALIZATION LOGIC
-# ==========================================
 
 def agent_portrayal(agent):
     if agent is None: return {}
@@ -51,9 +50,8 @@ def agent_portrayal(agent):
 
     return portrayal
 
-# ==========================================
+
 # MODEL PARAMETERS
-# ==========================================
 
 model_params = {
     "coordination_type": {
@@ -70,7 +68,6 @@ model_params = {
         "max": 10,
         "step": 1,
     },
-    # === UPDATED: Added slider for Order Rate ===
     "order_rate": {
         "type": "SliderFloat",
         "value": 0.1,
@@ -81,9 +78,8 @@ model_params = {
     }
 }
 
-# ==========================================
+
 # SERVER PAGE
-# ==========================================
 
 # Initialize with defaults matching model_params
 initial_model = WarehouseModel(n_robots=5, order_rate=0.1)

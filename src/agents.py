@@ -1,9 +1,8 @@
-# agents.py
 import mesa
 import random
 import heapq
 
-# ... (Keep constants) ...
+# Battery States
 BATTERY_CAPACITY = 100
 BATTERY_DRAIN_MOVE = 1
 BATTERY_DRAIN_IDLE = 0.1
@@ -17,7 +16,7 @@ STATE_TO_DELIVER = "TO_DELIVER"
 STATE_CHARGING = "CHARGING"
 STATE_TO_CHARGE = "TO_CHARGE" 
 
-# === Random colors for active orders ===
+# color palette for active orders
 VISUALIZATION_COLORS = [
     "#00FFFF", "#FF00FF", "#FF1493", "#32CD32", "#008080", 
     "#000080", "#800000", "#808000", "#FFD700", "#4B0082"
@@ -48,7 +47,7 @@ class RobotAgent(mesa.Agent):
         if self.battery < LOW_BATTERY_THRESHOLD and self.state != STATE_CHARGING and self.state != STATE_TO_CHARGE:
             self.state = STATE_TO_CHARGE
         
-        # === STATE MACHINE ===
+        # STATE MACHINE 
         if self.state == STATE_TO_PICKUP:
             if self.current_order:
                 target_access = self.get_access_point(self.current_order.pickup_pos)
@@ -102,7 +101,6 @@ class RobotAgent(mesa.Agent):
         self.state = STATE_IDLE
         self.orders_completed += 1
 
-    # ... (Keep get_access_point, get_nearest_charger, move_towards, a_star_search, etc.) ...
     def get_access_point(self, target_pos):
         x, y = target_pos
         potential_access_points = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
@@ -199,7 +197,7 @@ class RobotAgent(mesa.Agent):
     def calculate_distance(self, target):
         return self.manhattan_distance(self.pos, target)
 
-# ... (OrderManagerAgent and Static Agents) ...
+
 class OrderManagerAgent(mesa.Agent):
     def __init__(self, unique_id, model):
         super().__init__(model)
@@ -207,7 +205,7 @@ class OrderManagerAgent(mesa.Agent):
         self.completed_orders = 0
 
     def step(self):
-        # === UPDATED: Use dynamic model.order_rate ===
+        # Randomly create new orders
         if random.random() < self.model.order_rate: 
             self.create_new_order()
             
@@ -234,7 +232,6 @@ class OrderManagerAgent(mesa.Agent):
                 if isinstance(agent, PackingStationAgent):
                     agent.color = highlight_color
 
-    # ... (Keep existing allocation methods) ...
     def run_cnp_allocation(self, unassigned_orders):
         idle_robots = [a for a in self.model.schedule.agents if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: return
@@ -266,6 +263,7 @@ class OrderManagerAgent(mesa.Agent):
         return False
 
     def get_unassigned_orders(self): return [o for o in self.orders if o.assigned_to is None]
+    
     def report_completion(self, order): self.completed_orders += 1
 
 class ShelfAgent(mesa.Agent):

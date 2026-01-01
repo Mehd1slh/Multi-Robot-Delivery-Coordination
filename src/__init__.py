@@ -1,6 +1,7 @@
 """
 Multi-Robot Delivery Coordination System
 Master IPS - M2 Project (2025-2026)
+Realised By : EL MAHRAOUI Amal  - SALIH El Mehdi
 
 This package contains the agent logic, environment model, and visualization server 
 for simulating a warehouse environment with multiple coordination mechanisms.

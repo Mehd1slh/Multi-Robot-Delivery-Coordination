@@ -8,12 +8,11 @@ GRID_HEIGHT = 20
 NUM_ROBOTS = 5
 
 class WarehouseModel(mesa.Model):
-    # === UPDATED: Added order_rate parameter (default 0.1) ===
     def __init__(self, coordination_type="greedy", n_robots=NUM_ROBOTS, order_rate=0.1):
         super().__init__()
         self.coordination_type = coordination_type 
         self.num_robots = n_robots
-        self.order_rate = order_rate # Store the rate from the UI
+        self.order_rate = order_rate
         self.running = True 
         
         self.grid = mesa.space.MultiGrid(GRID_WIDTH, GRID_HEIGHT, torus=False)
