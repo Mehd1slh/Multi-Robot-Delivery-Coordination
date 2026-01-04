@@ -6,7 +6,7 @@ import heapq
 BATTERY_CAPACITY = 100
 BATTERY_DRAIN_MOVE = 1
 BATTERY_DRAIN_IDLE = 0.1
-CHARGE_RATE = 5
+CHARGE_RATE = 10
 LOW_BATTERY_THRESHOLD = 20
 
 # Robot States
@@ -16,6 +16,11 @@ STATE_TO_DELIVER = "TO_DELIVER"
 STATE_CHARGING = "CHARGING"
 STATE_TO_CHARGE = "TO_CHARGE" 
 
+# Robot & Package Constants
+ROBOT_CAPACITIES = [20, 30, 40]
+MIN_PACKAGE_WEIGHT = 5
+MAX_PACKAGE_WEIGHT = 40
+
 # color palette for active orders
 VISUALIZATION_COLORS = [
     "#00FFFF", "#FF00FF", "#FF1493", "#32CD32", "#008080", 
@@ -23,8 +28,9 @@ VISUALIZATION_COLORS = [
 ]
 
 class Order:
-    def __init__(self, order_id, pickup_pos, dropoff_pos):
+    def __init__(self, order_id, pickup_pos, dropoff_pos, weight):
         self.order_id = order_id
+        self.weight = weight
         self.pickup_pos = pickup_pos
         self.dropoff_pos = dropoff_pos
         self.assigned_to = None
@@ -39,6 +45,9 @@ class RobotAgent(mesa.Agent):
         self.current_order = None
         self.orders_completed = 0
         self.distance_traveled = 0
+
+        # NEW: Random capacity assignment (20, 30, or 40)
+        self.capacity = random.choice(ROBOT_CAPACITIES)
 
     def step(self):
         self.update_battery()
@@ -179,20 +188,42 @@ class RobotAgent(mesa.Agent):
     def behavior_greedy(self):
         available_orders = self.model.order_manager.get_unassigned_orders()
         if not available_orders: return
-        best_order = min(available_orders, key=lambda o: self.calculate_distance(o.pickup_pos))
+        # Filter orders that fit in this robot's capacity
+        feasible_orders = [o for o in available_orders if o.weight <= self.capacity]
+        if not feasible_orders: return
+
+        best_order = min(feasible_orders, key=lambda o: self.calculate_distance(o.pickup_pos))
         if self.model.order_manager.assign_order_specifically(self, best_order):
             self.current_order = best_order
             self.state = STATE_TO_PICKUP
 
     def calculate_cnp_bid(self, order):
+        # Checking capacity constraint
         if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD: return -1
+        if order.weight > self.capacity: return -1  # Cannot carry this order
+        
         dist = self.calculate_distance(order.pickup_pos)
-        return max(0, (self.battery * 0.5) - (dist * 2.0))
+        base_score = (self.battery * 0.5) - (dist * 2.0)
+
+        # We penalize using a big capacity robot for a small package
+        wasted_space = self.capacity - order.weight
+        penalty = wasted_space * 1.0 
+        
+        return max(0, base_score - penalty)
 
     def calculate_auction_bid(self, order):
+        # Checking capacity constraint
         if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD: return float('inf')
+        if order.weight > self.capacity: return float('inf') # Cost is infinite if I can't carry it
+        
         dist = self.calculate_distance(order.pickup_pos)
-        return dist + (BATTERY_CAPACITY - self.battery) * 0.1
+        
+        # In auctions, "Bid" usually represents "Cost". Wasting space is an "extra cost" to the system.
+        wasted_space = self.capacity - order.weight
+        opportunity_cost = wasted_space * 1.0
+        
+        # Total Cost = Distance + Battery Pain + Opportunity Cost
+        return dist + ((BATTERY_CAPACITY - self.battery) * 0.1) + opportunity_cost
 
     def calculate_distance(self, target):
         return self.manhattan_distance(self.pos, target)
@@ -218,7 +249,9 @@ class OrderManagerAgent(mesa.Agent):
         pickup = self.model.get_random_shelf()
         dropoff = self.model.get_random_packing_station()
         if pickup and dropoff:
-            self.orders.append(Order(len(self.orders), pickup, dropoff))
+            # Assign random weight to order
+            weight = random.randint(MIN_PACKAGE_WEIGHT, MAX_PACKAGE_WEIGHT)
+            self.orders.append(Order(len(self.orders), pickup, dropoff, weight))
             
             highlight_color = random.choice(VISUALIZATION_COLORS)
             
@@ -236,6 +269,7 @@ class OrderManagerAgent(mesa.Agent):
         idle_robots = [a for a in self.model.schedule.agents if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: return
         for order in unassigned_orders:
+            # Robots will return -1 if they lack capacity
             bids = {r: r.calculate_cnp_bid(order) for r in idle_robots}
             valid_bids = {r: s for r, s in bids.items() if s >= 0}
             if valid_bids:
@@ -247,6 +281,7 @@ class OrderManagerAgent(mesa.Agent):
         idle_robots = [a for a in self.model.schedule.agents if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: return
         for order in unassigned_orders:
+            # Robots will return infinity if they lack capacity
             bids = {r: r.calculate_auction_bid(order) for r in idle_robots}
             valid_bids = {r: c for r, c in bids.items() if c != float('inf')}
             if valid_bids:
