@@ -21,22 +21,27 @@ COLOR_GRID = (230, 230, 230)
 COLOR_SIDEBAR = (40, 44, 52)
 COLOR_BUTTON = (70, 130, 180)
 COLOR_BUTTON_HOVER = (100, 149, 237)
+COLOR_BUTTON_ERROR = (200, 60, 60) # Red for Fault Injection
+COLOR_BUTTON_ERROR_HOVER = (230, 90, 90)
 COLOR_TEXT_WHITE = (255, 255, 255)
+COLOR_TEXT_BLACK = (0, 0, 0)
 COLOR_SLIDER_BG = (100, 100, 100)
 COLOR_SLIDER_HANDLE = (200, 200, 200)
 
 # UI COMPONENTS
 
 class Button:
-    def __init__(self, x, y, width, height, text, callback, param=None):
+    def __init__(self, x, y, width, height, text, callback, param=None, color=COLOR_BUTTON, hover_color=COLOR_BUTTON_HOVER):
         self.rect = pygame.Rect(x, y, width, height)
         self.text = text
         self.callback = callback
         self.param = param
+        self.base_color = color
+        self.hover_color = hover_color
         self.is_hovered = False
 
     def draw(self, screen, font):
-        color = COLOR_BUTTON_HOVER if self.is_hovered else COLOR_BUTTON
+        color = self.hover_color if self.is_hovered else self.base_color
         pygame.draw.rect(screen, color, self.rect, border_radius=5)
         text_surf = font.render(self.text, True, COLOR_TEXT_WHITE)
         text_rect = text_surf.get_rect(center=self.rect.center)
@@ -100,10 +105,12 @@ class WarehouseVisualizer:
         
         self.font_title = pygame.font.SysFont("Arial", 24, bold=True)
         self.font_ui = pygame.font.SysFont("Arial", 16)
+        # New font for drawing numbers on robots/shelves
+        self.font_tiny = pygame.font.SysFont("Arial", 12, bold=True)
 
         # Config Params
         self.n_robots = 5
-        self.coordination = "greedy"
+        self.coordination = "cnp"  # Changed default from "greedy" to "cnp"
         self.animation_speed = 0.15
 
         # Init Model
@@ -132,14 +139,18 @@ class WarehouseVisualizer:
         self.btn_pause = Button(0, 0, 120, 40, "Pause/Play", self.toggle_pause)
         self.btn_reset = Button(0, 0, 120, 40, "Reset", self.reset_model)
 
-        # 3. Speed Controls (Added Back)
+        # 3. Speed Controls
         self.btn_slower = Button(0, 0, 120, 40, "Slower", self.decrease_speed)
         self.btn_faster = Button(0, 0, 120, 40, "Faster", self.increase_speed)
+
+        # 4. Fault Injection (NEW)
+        self.btn_fail = Button(0, 0, 250, 40, "FAIL RANDOM ROBOT", self.trigger_fail, 
+                               color=COLOR_BUTTON_ERROR, hover_color=COLOR_BUTTON_ERROR_HOVER)
         
         # Combine all buttons
-        self.buttons = [self.btn_mech, self.btn_pause, self.btn_reset, self.btn_slower, self.btn_faster]
+        self.buttons = [self.btn_mech, self.btn_pause, self.btn_reset, self.btn_slower, self.btn_faster, self.btn_fail]
         
-        # 4. Robot Slider
+        # 5. Robot Slider
         self.slider_robots = Slider(0, 0, 250, 1, 10, self.n_robots, "Robots")
 
     def reposition_ui(self):
@@ -150,15 +161,18 @@ class WarehouseVisualizer:
         self.btn_mech.rect.topleft = (bx, by)
         
         # Slider
-        self.slider_robots.rect.topleft = (bx, by + 70)
+        self.slider_robots.rect.topleft = (bx, by + 60)
         
         # Pause / Reset (Row 1)
-        self.btn_pause.rect.topleft = (bx, by + 140)
-        self.btn_reset.rect.topleft = (bx + 130, by + 140)
+        self.btn_pause.rect.topleft = (bx, by + 120)
+        self.btn_reset.rect.topleft = (bx + 130, by + 120)
         
-        # Slower / Faster (Row 2 - Added Back)
-        self.btn_slower.rect.topleft = (bx, by + 190)
-        self.btn_faster.rect.topleft = (bx + 130, by + 190)
+        # Slower / Faster (Row 2)
+        self.btn_slower.rect.topleft = (bx, by + 170)
+        self.btn_faster.rect.topleft = (bx + 130, by + 170)
+
+        # Fail Button (Row 3)
+        self.btn_fail.rect.topleft = (bx, by + 230)
 
     def cycle_mechanism(self):
         modes = ["greedy", "cnp", "auction"]
@@ -175,6 +189,9 @@ class WarehouseVisualizer:
 
     def increase_speed(self):
         self.animation_speed = min(1.0, self.animation_speed + 0.05)
+
+    def trigger_fail(self):
+        self.model.fail_random_robot()
 
     def update_layout(self, w, h):
         self.window_w = w
@@ -202,7 +219,7 @@ class WarehouseVisualizer:
         pygame.draw.rect(self.screen, COLOR_SIDEBAR, sidebar_rect)
         
         # Title
-        title = self.font_title.render("Configuration", True, COLOR_TEXT_WHITE)
+        title = self.font_title.render("Control Center", True, COLOR_TEXT_WHITE)
         self.screen.blit(title, (self.window_w - SIDEBAR_WIDTH + 20, 20))
         
         # Status
@@ -217,10 +234,14 @@ class WarehouseVisualizer:
         
         # Stats
         stats_y = 400
+        active_robots = len([r for r in self.model.robot_agents if r.state != 'IDLE' and r.state != 'FAILED'])
+        failed_robots = len([r for r in self.model.robot_agents if r.state == 'FAILED'])
+        
         stats = [
             f"Speed: {int(self.animation_speed * 100)}%",
             f"Orders Done: {self.model.order_manager.completed_orders}",
-            f"Active Robots: {len([r for r in self.model.robot_agents if r.state != 'IDLE'])}"
+            f"Active Robots: {active_robots}",
+            f"Failed Robots: {failed_robots}"
         ]
         for line in stats:
             surf = self.font_ui.render(line, True, COLOR_TEXT_WHITE)
@@ -246,7 +267,7 @@ class WarehouseVisualizer:
         return all_arrived
 
     def draw_game_area(self):
-        # Grid
+        # 1. Grid Lines
         gw = self.model.grid.width * self.cell_size
         gh = self.model.grid.height * self.cell_size
         for x in range(self.model.grid.width + 1):
@@ -256,7 +277,7 @@ class WarehouseVisualizer:
             py = self.offset_y + y * self.cell_size
             pygame.draw.line(self.screen, COLOR_GRID, (self.offset_x, py), (self.offset_x + gw, py))
 
-        # Static Agents
+        # 2. Static Agents (Shelves, Stations)
         for content, (x, y) in self.model.grid.coord_iter():
             rect = (self.offset_x + x*self.cell_size, self.offset_y + y*self.cell_size, self.cell_size, self.cell_size)
             for agent in content:
@@ -271,28 +292,68 @@ class WarehouseVisualizer:
                 elif name == "ChargingStationAgent":
                     pygame.draw.rect(self.screen, (255, 140, 0), rect)
 
-        # Robots
+        # 3. FIXED: Package Weights Display
+        for order in self.model.order_manager.orders:
+            # Show weight only if order is waiting to be picked up
+            show_weight = False
+            
+            if order.assigned_to is None:
+                # Unassigned order - always show
+                show_weight = True
+            elif hasattr(order.assigned_to, 'state') and order.assigned_to.state == "TO_PICKUP":
+                # Assigned but robot hasn't picked it up yet
+                show_weight = True
+            
+            if show_weight:
+                ox, oy = order.pickup_pos
+                px = int(self.offset_x + ox * self.cell_size + self.cell_size/2)
+                py = int(self.offset_y + oy * self.cell_size + self.cell_size/2)
+                
+                # Draw white text for weight
+                w_surf = self.font_tiny.render(str(order.weight), True, COLOR_TEXT_WHITE)
+                w_rect = w_surf.get_rect(center=(px, py))
+                self.screen.blit(w_surf, w_rect)
+
+        # 4. Robots
         for agent in self.model.robot_agents:
             if agent.unique_id not in self.smooth_positions: continue
             sx, sy = self.smooth_positions[agent.unique_id]
             px = int(self.offset_x + sx * self.cell_size + self.cell_size/2)
             py = int(self.offset_y + sy * self.cell_size + self.cell_size/2)
             
-            col = (100,100,100)
-            if agent.battery < 20: col = (255,0,0)
-            elif agent.state == "TO_DELIVER": col = (0,255,0)
-            elif agent.state == "TO_PICKUP": col = (0,0,255)
-            elif agent.state == "CHARGING": col = (255,255,0)
-            elif agent.state == "TO_CHARGE": col = (255,165,0)
+            # Color Logic
+            col = (100,100,100) # Grey default
+            if agent.state == "FAILED": 
+                col = (255, 0, 0) # RED for Failure
+            elif agent.battery < 20: 
+                col = (255, 255, 0) # Yellow for Low Battery
+            elif agent.state == "TO_DELIVER": 
+                col = (0, 200, 0) # Green
+            elif agent.state == "TO_PICKUP": 
+                col = (0, 0, 255) # Blue
+            elif agent.state == "CHARGING": 
+                col = (255, 165, 0) # Orange
+            elif agent.state == "TO_CHARGE": 
+                col = (255, 140, 0) # Dark Orange
             
             radius = int(self.cell_size/2.5)
             pygame.draw.circle(self.screen, col, (px, py), radius)
             
-            # Battery
+            # Draw Capacity inside Robot
+            cap_text = str(agent.capacity)
+            text_col = COLOR_TEXT_WHITE if agent.state in ["TO_PICKUP", "FAILED"] else COLOR_TEXT_BLACK
+            
+            cap_surf = self.font_tiny.render(cap_text, True, text_col)
+            cap_rect = cap_surf.get_rect(center=(px, py))
+            self.screen.blit(cap_surf, cap_rect)
+            
+            # Battery Bar
             bar_w = self.cell_size - 4
             bar_h = 4
             fill = (agent.battery/100) * bar_w
+            # Draw bg
             pygame.draw.rect(self.screen, (50,50,50), (px-bar_w//2, py-radius-6, bar_w, bar_h))
+            # Draw fill
             pygame.draw.rect(self.screen, (0,255,0), (px-bar_w//2, py-radius-6, fill, bar_h))
 
     def run(self):
@@ -308,7 +369,6 @@ class WarehouseVisualizer:
                 # UI Events
                 for btn in self.buttons: btn.handle_event(event)
                 if self.slider_robots.handle_event(event):
-                    # If slider changed, update param and reset
                     if self.n_robots != self.slider_robots.value:
                         self.n_robots = self.slider_robots.value
                         self.reset_model()

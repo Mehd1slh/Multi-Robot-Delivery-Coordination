@@ -5,10 +5,10 @@ from agents import RobotAgent, ShelfAgent, PackingStationAgent, ChargingStationA
 
 GRID_WIDTH = 20
 GRID_HEIGHT = 20
-NUM_ROBOTS = 5
+NUM_ROBOTS = 3
 
 class WarehouseModel(mesa.Model):
-    def __init__(self, coordination_type="greedy", n_robots=NUM_ROBOTS, order_rate=0.1):
+    def __init__(self, coordination_type="cnp", n_robots=NUM_ROBOTS, order_rate=0.08):
         super().__init__()
         self.coordination_type = coordination_type 
         self.num_robots = n_robots
@@ -33,8 +33,9 @@ class WarehouseModel(mesa.Model):
         self.datacollector = mesa.DataCollector(
             model_reporters={
                 "Throughput": lambda m: m.order_manager.completed_orders,
-                "Avg_Battery": lambda m: self._get_avg_battery(),
-                "Active_Robots": lambda m: self._get_active_robot_count()
+                "Total_Repairs": lambda m: sum(r.repairs_triggered for r in m.robot_agents),
+                "Conflict_Rate": lambda m: m._get_conflict_rate(),
+                "Idle_Time": lambda m: self._get_idle_time()
             },
             agent_reporters={
                 "Battery": lambda a: a.battery if isinstance(a, RobotAgent) else None,
@@ -84,11 +85,30 @@ class WarehouseModel(mesa.Model):
         for agent in cell_contents:
             if isinstance(agent, (ShelfAgent, PackingStationAgent)):
                 return False
+            # Robots are obstacles if they are at that position
             if isinstance(agent, RobotAgent):
-                 return False
+                # If you want active robots to pass each other, keep the original check.
+                # To treat FAILED robots as hard obstacles:
+                if agent.state == "FAILED":
+                    return False
+                return False # Keeping your original logic where any robot is an obstacle
 
         return True
 
+    def fail_random_robot(self):
+        active_robots = [r for r in self.robot_agents if r.state != "FAILED"]
+        if active_robots:
+            robot = self.random.choice(active_robots)
+            robot.trigger_failure()
+
+    def _get_conflict_rate(self):
+        """Returns count of robots currently failed (acting as obstacles)."""
+        return sum(1 for r in self.robot_agents if r.state == "FAILED")
+
+    def _get_idle_time(self):
+        """Returns count of robots currently doing nothing."""
+        return sum(1 for r in self.robot_agents if r.state == "IDLE")
+    
     def get_random_shelf(self):
         return random.choice(self.shelves) if self.shelves else None
 

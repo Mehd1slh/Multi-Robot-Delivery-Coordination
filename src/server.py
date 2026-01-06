@@ -1,6 +1,7 @@
 # server.py
 import sys
 import os
+import solara
 
 # Fix path to allow importing local modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,8 +21,14 @@ def agent_portrayal(agent):
     portrayal = {"size": 50, "marker": "o"}
 
     if isinstance(agent, RobotAgent):
-        if agent.battery < LOW_BATTERY_THRESHOLD:
+        # 1. Check FAILED state first and exclusively
+        if agent.state == "FAILED": 
             portrayal["color"] = "red"
+        
+        # 2. Change 'if' to 'elif' here to connect the chain
+        elif agent.battery < LOW_BATTERY_THRESHOLD:
+            portrayal["color"] = "yellow"
+            
         elif agent.state == STATE_TO_DELIVER:
             portrayal["color"] = "green"
         elif agent.state == STATE_TO_PICKUP:
@@ -37,7 +44,6 @@ def agent_portrayal(agent):
         portrayal["marker"] = "s" 
         portrayal["size"] = 80
         
-        # Check for dynamic color
         if hasattr(agent, "color"):
             portrayal["color"] = agent.color
         else:
@@ -56,13 +62,13 @@ def agent_portrayal(agent):
 model_params = {
     "coordination_type": {
         "type": "Select",
-        "value": "greedy",
+        "value": "cnp",
         "values": ["greedy", "cnp", "auction"],
         "label": "Coordination Mechanism",
     },
     "n_robots": {
         "type": "SliderInt",
-        "value": 5,
+        "value": 3,
         "label": "Number of Robots",
         "min": 1,
         "max": 10,
@@ -82,7 +88,7 @@ model_params = {
 # SERVER PAGE
 
 # Initialize with defaults matching model_params
-initial_model = WarehouseModel(n_robots=5, order_rate=0.1)
+initial_model = WarehouseModel(n_robots=3, order_rate=0.08, coordination_type="cnp")
 
 page = SolaraViz(
     model=initial_model,
@@ -91,6 +97,24 @@ page = SolaraViz(
         make_plot_component({"Throughput": "black"}),
         make_plot_component({"Avg_Battery": "red"}),
         make_plot_component({"Active_Robots": "green"}),
+    ],
+    model_params=model_params,
+    name="Multi-Robot Delivery System"
+)
+
+@solara.component
+def Controls(model):
+    with solara.Card("Manual Fault Injection"):
+        solara.Button(label="Fail Random Robot", on_click=model.fail_random_robot, color="error")
+
+# Update the SolaraViz call to include the new component
+page = SolaraViz(
+    model=initial_model,
+    components=[
+        make_space_component(agent_portrayal),
+        Controls, # Add the manual button here
+        make_plot_component({"Throughput": "black"}),
+        # ...
     ],
     model_params=model_params,
     name="Multi-Robot Delivery System"
