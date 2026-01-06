@@ -7,13 +7,26 @@ GRID_WIDTH = 20
 GRID_HEIGHT = 20
 NUM_ROBOTS = 3
 
+def compute_gini(model):
+    # Calculate fairness based on orders completed per robot
+    agent_wealth = [agent.orders_completed for agent in model.robot_agents]
+    x = sorted(agent_wealth)
+    N = len(model.robot_agents)
+    B = sum(x)
+    if B == 0: return 0
+    return (2 * sum((i + 1) * xi for i, xi in enumerate(x)) - (N + 1) * B) / (N * B)
+
+def get_total_distance(model):
+    return sum([agent.distance_traveled for agent in model.robot_agents])
+
 class WarehouseModel(mesa.Model):
-    def __init__(self, coordination_type="cnp", n_robots=NUM_ROBOTS, order_rate=0.08):
+    def __init__(self, coordination_type="cnp", n_robots=NUM_ROBOTS, order_rate=0.08, failure_step=-1):
         super().__init__()
         self.coordination_type = coordination_type 
         self.num_robots = n_robots
         self.order_rate = order_rate
-        self.running = True 
+        self.running = True
+        self.failure_step = failure_step # -1 means no scheduled failure 
         
         self.grid = mesa.space.MultiGrid(GRID_WIDTH, GRID_HEIGHT, torus=False)
         self.schedule = mesa.time.RandomActivation(self)
@@ -33,9 +46,10 @@ class WarehouseModel(mesa.Model):
         self.datacollector = mesa.DataCollector(
             model_reporters={
                 "Throughput": lambda m: m.order_manager.completed_orders,
-                "Total_Repairs": lambda m: sum(r.repairs_triggered for r in m.robot_agents),
                 "Conflict_Rate": lambda m: m._get_conflict_rate(),
-                "Idle_Time": lambda m: self._get_idle_time()
+                "Idle_Time": lambda m: self._get_idle_time(),
+                "Total_Distance": get_total_distance, # Efficiency
+                "Fairness_Gini": compute_gini         # Fairness
             },
             agent_reporters={
                 "Battery": lambda a: a.battery if isinstance(a, RobotAgent) else None,
@@ -46,6 +60,11 @@ class WarehouseModel(mesa.Model):
     def step(self):
         self.datacollector.collect(self)
         self.schedule.step()
+
+        # automatic failure injection for scenarios
+        if self.schedule.steps == self.failure_step:
+            print(f"Scenario Trigger: Injecting failure at step {self.schedule.steps}")
+            self.fail_random_robot()
 
     def _init_warehouse_layout(self):
         # Shelves
