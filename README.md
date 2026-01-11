@@ -1,4 +1,4 @@
-<h1 align="center">Multi-Robot Delivery Coordination & Resilience</h1>
+<h1 align="center">Multi-Robot Delivery Coordination </h1>
 
 <p align="center">
   <img src="Capture d'écran 2026-01-11 174001.png" alt="Warehouse Simulation Overview" width="800">
@@ -86,4 +86,5 @@ While **Greedy** is effective for raw speed in simple scenarios, **Auction-based
 <p align="center">
   <em>15 January, 2026 • Wednesday</em>
 </p>
+
 
