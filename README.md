@@ -47,25 +47,7 @@ While **Greedy** is effective for raw speed in simple scenarios, **Auction-based
    pip install -r requirements.txt
    ````
 ## Usage
-1. **Running the Simulation**
-
-   To run the main simulation with different coordination modes
-   ```bash
-   # Greedy coordination (default)
-   python simulation.py --mode greedy --robots 10 --packages 50
-
-   # Contract Net Protocol
-   python simulation.py --mode cnp --robots 10 --packages 50
-
-   # Auction-based coordination
-   python simulation.py --mode auction --robots 10 --packages 50
-
-   # With failure simulation
-   python simulation.py --mode auction --robots 10 --packages 50 --failure-rate 0.1
-
-   ````
-
-3. **Running the Benchmark**
+1. **Running the Benchmark**
    To run comparative analysis of all three coordination mechanisms:
     ```bash
    python benchmark.py --steps 200 --runs 10
@@ -86,5 +68,6 @@ While **Greedy** is effective for raw speed in simple scenarios, **Auction-based
 <p align="center">
   <em>15 January, 2026 • Wednesday</em>
 </p>
+
 
 
