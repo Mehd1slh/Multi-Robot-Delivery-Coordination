@@ -81,8 +81,9 @@ While **Greedy** is effective for raw speed in simple scenarios, **Auction-based
 --- 
 
 <p align="center">
-  <img src="your-image-filename.jpg" alt="Project Image" width="600">
+  <img src="Capture d'écran 2026-01-11 175343.png" alt="Project Image" width="600">
 </p>
 <p align="center">
   <em>15 January, 2026 • Wednesday</em>
 </p>
+
