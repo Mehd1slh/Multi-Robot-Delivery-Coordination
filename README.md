@@ -5,16 +5,40 @@
 </p>
 
 ## 1. Project Overview
-This project simulates a **Multi-Agent System (MAS)** for autonomous warehouse logistics using the **Mesa** framework. The research focuses on comparing three coordination mechanisms—**Greedy, Contract Net Protocol (CNP), and Auction**—to evaluate their efficiency and ability to recover from unexpected robot failures.
+This project simulates a **Multi-Agent System (MAS)** for autonomous warehouse logistics using the **Mesa** framework. The research focuses on comparing three coordination mechanisms: **Greedy, Contract Net Protocol (CNP), and Auction**, to evaluate their efficiency, workload fairness, and ability to recover from unexpected robot failures.
 
-## 2.  Key Features
+## 2. Key Features
 * **Three Coordination Modes:** Switch between decentralized Greedy logic, manager-led CNP, or a complex Auction-based cost function.
+* **Custom Map Designer:** Integrated GUI to build your own warehouse layouts (Shelves, Packing, and Charging stations).
+* **Real-time Monitoring:** Dual-interface support with live graphing of Throughput, Battery levels, and Gini Coefficient (fairness).
 * **Dynamic Failure & Rescue System:** Automatic detection of robot failures with a specialized "Rescue" protocol that re-allocates dropped packages to active robots.
 * **Energy Management:** Advanced battery decay logic based on movement and idle states, featuring autonomous recharging cycles.
-* **A StarPathfinding:** Intelligent navigation that treats shelves as obstacles and finds optimal delivery routes.
-* **Diverse Fleet:** Robots possess varying weight capacities (20, 30, or 40 units) to test complex allocation logic.
+* **A star Pathfinding:** Intelligent navigation that treats shelves and failed robots as obstacles.
 
-## 3.  Experimental Results & Conclusions
+## 3. Project Structure
+```text
+C:.
+│   map_editor.py        # Logic for creating and saving custom grid layouts
+│   run.py               # Launcher for the Solara/Mesa Web Dashboard
+│   visualizer.py        # Main Pygame GUI (Menu, Map Editor, and Simulation)
+│   requirements.txt     # Project dependencies
+│
+├───expirements
+│       analysis.ipynb    # Data analysis and visualization of benchmark results
+│       benchmark.py      # Automated script for batch-running scenarios
+│       simulation_results.csv
+│
+├───maps
+│       custom_warehouse.json # Saved layout exported from the editor
+│
+└───src
+    │   __init__.py      # Package initialization and class exposure
+    │   agents.py        # Behavior logic for Robots, Managers, and Stations
+    │   model.py         # The Mesa Model and data collection infrastructure
+    │   server.py        # Web-based visualization configuration (Solara)
+```
+
+## 4.  Experimental Results & Conclusions
 Based on the simulation analysis, we observed the following performance trends:
 
 | Metric | Winner | Conclusion |
@@ -47,10 +71,23 @@ While **Greedy** is effective for raw speed in simple scenarios, **Auction-based
    pip install -r requirements.txt
    ````
 ## Usage
-1. **Running the Benchmark**
-   To run comparative analysis of all three coordination mechanisms:
+The project offers multiple ways to interact with the simulation, ranging from a custom map designer to advanced real-time monitoring.
+1. **Option A: Pygame Interface (Editor & Simulation)**
+   Recommended for designing maps and watching smooth robot movements.
     ```bash
-   python benchmark.py --steps 200 --runs 10
+   python visualizer.py
+    ````
+---
+2. **Option B: Web Dashboard (Solara)**
+   Recommended for real-time performance monitoring and data graphing.
+    ```bash
+   python run.py
+    ````
+---
+3. **Option C: Benchmarking**
+   To run batch comparisons of all three coordination mechanisms:
+    ```bash
+   python expirements/benchmark.py --steps 200 --runs 10
     ````
 ---
 
