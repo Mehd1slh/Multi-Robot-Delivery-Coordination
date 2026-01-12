@@ -2,15 +2,17 @@ import mesa
 import random
 import heapq
 
-# Battery States
-BATTERY_CAPACITY = 100
-BATTERY_DRAIN_MOVE = 1
-BATTERY_DRAIN_IDLE = 0.1
-CHARGE_RATE = 100
-LOW_BATTERY_THRESHOLD = 25
-RECOVERY_TIME = 40 
+# --- Global Constants ---
 
-# Robot States
+# Battery Management
+BATTERY_CAPACITY = 100
+BATTERY_DRAIN_MOVE = 1       # Cost per step moved
+BATTERY_DRAIN_IDLE = 0.1     # Cost per step while doing nothing
+CHARGE_RATE = 100            # Amount recovered per step at a station
+LOW_BATTERY_THRESHOLD = 25   # Point at which a robot prioritizes charging
+RECOVERY_TIME = 40           # Steps a robot stays in 'FAILED' state before repair
+
+# Robot States for Finite State Machine (FSM)
 STATE_IDLE = "IDLE"
 STATE_TO_PICKUP = "TO_PICKUP"
 STATE_TO_DELIVER = "TO_DELIVER"
@@ -18,42 +20,45 @@ STATE_CHARGING = "CHARGING"
 STATE_TO_CHARGE = "TO_CHARGE"
 STATE_FAILED = "FAILED"
 
-# Robot & Package Constants
+# Physical Constraints
 ROBOT_CAPACITIES = [20, 30, 40]
 MIN_PACKAGE_WEIGHT = 5
 MAX_PACKAGE_WEIGHT = 40
 
-# color palette for active orders
+# Colors used to highlight shelves/stations associated with active orders
 VISUALIZATION_COLORS = [
     "#00FFFF", "#FF00FF", "#FF1493", "#32CD32", "#008080", 
     "#000080", "#800000", "#808000", "#FFD700", "#4B0082"
 ]
 
 class Order:
+    """ Represents a delivery task from a pickup location (Shelf) to a dropoff location (Packing Station). """
     def __init__(self, order_id, pickup_pos, dropoff_pos, weight):
         self.order_id = order_id
         self.weight = weight
         self.pickup_pos = pickup_pos
         self.dropoff_pos = dropoff_pos
-        self.assigned_to = None
+        self.assigned_to = None # Reference to the RobotAgent handling the order
 
 class RobotAgent(mesa.Agent):
+    """ The primary autonomous agent capable of moving, picking up orders, and managing battery levels. """
     def __init__(self, unique_id, model, start_pos):
         super().__init__(model) 
         self.custom_id = unique_id
         self.pos = None
         self.battery = BATTERY_CAPACITY
         self.state = STATE_IDLE
-        self.previous_state = None
+        self.previous_state = None  # Stores state before charging to resume task later
         self.current_order = None
         self.orders_completed = 0
         self.distance_traveled = 0
         self.failure_timer = 0
         self.repairs_triggered = 0
-        self.capacity = random.choice(ROBOT_CAPACITIES)
+        self.capacity = random.choice(ROBOT_CAPACITIES) # Randomized robot strength
 
     def step(self):
-        # If failed, wait for recovery
+        """ Main logic loop executed at every simulation tick. """
+        # Handle mechanical failure cooldown
         if self.state == STATE_FAILED:
             self.failure_timer -= 1
             if self.failure_timer <= 0:
@@ -64,19 +69,19 @@ class RobotAgent(mesa.Agent):
 
         self.update_battery()
         
-        # Check for battery death
+        # Immediate failure if battery hits zero
         if self.battery <= 0 and self.state != STATE_FAILED:
             self.trigger_failure()
             return
         
-        # Low Battery Logic - preserve current order
+        # Proactive charging: move to charger if battery is low, but remember what we were doing
         if self.battery < LOW_BATTERY_THRESHOLD and self.state not in [STATE_CHARGING, STATE_TO_CHARGE, STATE_FAILED]:
             if self.previous_state is None:
                 self.previous_state = self.state if self.state in [STATE_TO_PICKUP, STATE_TO_DELIVER] else STATE_IDLE
             self.state = STATE_TO_CHARGE
-            print(f"🪫 Robot {self.unique_id} charging. Holding Order ID: {self.current_order.order_id if self.current_order else 'None'}")
+            print(f"🟫 Robot {self.unique_id} charging. Holding Order ID: {self.current_order.order_id if self.current_order else 'None'}")
                 
-        # STATE MACHINE 
+        # --- State Machine Logic ---
         if self.state == STATE_TO_PICKUP:
             if self.current_order:
                 target_access = self.get_access_point(self.current_order.pickup_pos)
@@ -95,7 +100,6 @@ class RobotAgent(mesa.Agent):
                     if self.pos == target_access:
                         self.complete_order()
             else:
-                print(f"⚠️ Robot {self.unique_id} was in DELIVER state but current_order was missing!")
                 self.state = STATE_IDLE
 
         elif self.state == STATE_TO_CHARGE:
@@ -107,13 +111,15 @@ class RobotAgent(mesa.Agent):
         elif self.state == STATE_CHARGING:
             self.charge()
             if self.battery == BATTERY_CAPACITY:
-                self.vacate_station()
+                self.vacate_station() # Clear the charger for other robots
             
         elif self.state == STATE_IDLE:
+            # Under greedy coordination, robots seek their own tasks without a central manager
             if self.model.coordination_type == "greedy":
                 self.behavior_greedy()
 
     def trigger_failure(self):
+        """ Simulates a breakdown, requiring a re-assignment of any current tasks. """
         print(f"💥 Robot {self.unique_id} FAILED at {self.pos}! State was: {self.state}")
         old_state = self.state
         self.state = STATE_FAILED
@@ -123,7 +129,7 @@ class RobotAgent(mesa.Agent):
             self.model.order_manager.handle_robot_failure(self, old_state)
     
     def vacate_station(self):
-        """Finds the nearest walkable cell that isn't a charging station to unblock the queue."""
+        """ Unblocks a charging station by moving to a neighboring walkable cell. """
         neighbors = self.model.grid.get_neighborhood(self.pos, moore=False, include_center=False)
         moved = False
         
@@ -135,19 +141,15 @@ class RobotAgent(mesa.Agent):
                 moved = True
                 break
         
-        if not moved:
-            print(f"⚠️ Robot {self.unique_id} cannot vacate - no valid neighbor!")
-        
-        # Resume previous task if exists
+        # Resume the task being held before the robot went to charge
         if hasattr(self, 'previous_state') and self.previous_state:
             self.state = self.previous_state
             self.previous_state = None
-            print(f"🔄 Robot {self.unique_id} vacated and resumed {self.state} with order {self.current_order.order_id if self.current_order else 'None'}")
         else:
             self.state = STATE_IDLE
-            print(f"🔄 Robot {self.unique_id} vacated to IDLE")
 
     def reset_shelf_color(self, pos):
+        """ Reverts a shelf to its default color once a package is removed. """
         if self.model.grid.out_of_bounds(pos): return
         cell_contents = self.model.grid.get_cell_list_contents(pos)
         for agent in cell_contents:
@@ -155,6 +157,7 @@ class RobotAgent(mesa.Agent):
                 agent.color = "brown"
 
     def reset_station_color(self, pos):
+        """ Reverts a packing station to black once the order delivery is finished. """
         if self.model.grid.out_of_bounds(pos): return
         cell_contents = self.model.grid.get_cell_list_contents(pos)
         for agent in cell_contents:
@@ -162,6 +165,7 @@ class RobotAgent(mesa.Agent):
                 agent.color = "black"
 
     def complete_order(self):
+        """ Finalizes the delivery task and resets robot state. """
         if self.current_order:
             print(f"✅ Robot {self.unique_id} completed order {self.current_order.order_id}")
             self.reset_station_color(self.current_order.dropoff_pos)
@@ -172,12 +176,11 @@ class RobotAgent(mesa.Agent):
         self.orders_completed += 1
 
     def get_access_point(self, target_pos):
+        """ Finds an adjacent walkable cell to a target (shelf/station) since targets are non-walkable. """
         x, y = target_pos
         potential_access_points = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
         
         if self.pos in potential_access_points:
-            return self.pos
-        if self.pos == target_pos:
             return self.pos
 
         valid_points = [p for p in potential_access_points if self.model.is_walkable(p)]
@@ -185,11 +188,13 @@ class RobotAgent(mesa.Agent):
         return min(valid_points, key=lambda p: self.manhattan_distance(self.pos, p))
 
     def get_nearest_charger(self):
+        """ Identifies the closest available charging station. """
         chargers = self.model.charging_stations
         if not chargers: return self.pos
         return min(chargers, key=lambda c: self.manhattan_distance(self.pos, c))
 
     def move_towards(self, target_pos):
+        """ Executes a single step toward a goal using pathfinding. """
         if self.pos == target_pos: return
         path = self.a_star_search(self.pos, target_pos)
         if path and len(path) > 0:
@@ -200,6 +205,7 @@ class RobotAgent(mesa.Agent):
                 self.battery -= BATTERY_DRAIN_MOVE
 
     def a_star_search(self, start, goal):
+        """ Classic A* implementation to find the shortest path while avoiding obstacles. """
         frontier = []
         heapq.heappush(frontier, (0, start))
         came_from = {start: None}
@@ -225,6 +231,7 @@ class RobotAgent(mesa.Agent):
         return []
 
     def get_neighbors(self, pos):
+        """ Returns orthogonal adjacent cells. """
         x, y = pos
         candidates = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
         valid_neighbors = []
@@ -234,6 +241,7 @@ class RobotAgent(mesa.Agent):
         return valid_neighbors
 
     def reconstruct_path(self, came_from, start, goal):
+        """ Trace back from goal to start to generate the movement list. """
         current = goal
         path = []
         while current != start:
@@ -243,19 +251,20 @@ class RobotAgent(mesa.Agent):
         return path
 
     def manhattan_distance(self, pos1, pos2):
+        """ Simple heuristic for grid-based distance. """
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
     def charge(self):
-        """Handle battery charging without changing state - vacate_station handles state resumption"""
+        """ Increases battery level until capacity is reached. """
         self.battery = min(self.battery + CHARGE_RATE, BATTERY_CAPACITY)
-        if self.battery == BATTERY_CAPACITY:
-            print(f"⚡ Robot {self.unique_id} fully charged. Will resume upon vacating.")
 
     def update_battery(self):
+        """ Passive battery drain while the robot is active or waiting. """
         if self.state == STATE_IDLE: 
             self.battery -= BATTERY_DRAIN_IDLE
 
     def behavior_greedy(self):
+        """ Simple behavior: pick the nearest task that fits within carrying capacity. """
         available_orders = self.model.order_manager.get_unassigned_orders()
         if not available_orders: return
         feasible_orders = [o for o in available_orders if o.weight <= self.capacity]
@@ -267,21 +276,24 @@ class RobotAgent(mesa.Agent):
             self.state = STATE_TO_PICKUP
 
     def calculate_cnp_bid(self, order):
+        """ Bid for the Contract Net Protocol based on distance, battery, and fitness. """
         if self.current_order is not None:
-            return -1
+            return -1 # Already busy
         if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD:
-            return -1
+            return -1 # Not fit for work
         if order.weight > self.capacity:
-            return -1
+            return -1 # Task too heavy
         
         dist = self.calculate_distance(order.pickup_pos)
+        # Score calculation: High battery is good, high distance is bad
         base_score = (self.battery * 0.5) - (dist * 2.0)
         wasted_space = self.capacity - order.weight
-        penalty = wasted_space * 1.0 
+        penalty = wasted_space * 1.0 # Prefer robots whose capacity matches the weight
         
         return max(0, base_score - penalty)
 
     def calculate_auction_bid(self, order):
+        """ Bid for the Auction mechanism (lower is better, represents 'cost'). """
         if self.current_order is not None:
             return float('inf')
         if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD:
@@ -291,7 +303,7 @@ class RobotAgent(mesa.Agent):
         
         dist = self.calculate_distance(order.pickup_pos)
         wasted_space = self.capacity - order.weight
-        opportunity_cost = wasted_space * 1.0
+        opportunity_cost = wasted_space * 1.0 # Penalize taking small items with large robots
         
         return dist + ((BATTERY_CAPACITY - self.battery) * 0.1) + opportunity_cost
 
@@ -300,6 +312,7 @@ class RobotAgent(mesa.Agent):
 
 
 class OrderManagerAgent(mesa.Agent):
+    """ The central 'dispatcher' responsible for order creation and task allocation. """
     def __init__(self, unique_id, model):
         super().__init__(model)
         self.orders = []
@@ -307,6 +320,7 @@ class OrderManagerAgent(mesa.Agent):
         self.next_order_id = 0
 
     def step(self):
+        """ Generates new tasks and initiates the global allocation process. """
         if random.random() < self.model.order_rate: 
             self.create_new_order()
             
@@ -314,41 +328,36 @@ class OrderManagerAgent(mesa.Agent):
         if not unassigned: 
             return
             
+        # Dispatch based on the model's global coordination setting
         if self.model.coordination_type == "cnp": 
             self.run_cnp_allocation(unassigned)
         elif self.model.coordination_type == "auction": 
             self.run_auction_allocation(unassigned)
 
     def handle_robot_failure(self, failed_robot, old_state):
-        """Handle robot failure and reassign its order"""
+        """ Rescue Logic: If a robot breaks, recover the package and re-issue the task. """
         order = failed_robot.current_order
         if not order:
             return
         
         if old_state == "TO_PICKUP":
-            # Robot was going to pick up but failed - just release the order
+            # Just put it back in the pool
             order.assigned_to = None
             print(f"🔄 Robot {failed_robot.unique_id} failed before pickup. Order {order.order_id} re-released.")
             
         elif old_state in ["TO_DELIVER", "TO_CHARGE"]:
-            # Robot had the package (either delivering or going to charge with it)
-            # The package is dropped at the failure location
+            # Drop the package where the robot died; it must be picked up from there now
             print(f"🚨 PACKAGE DROPPED! Robot {failed_robot.unique_id} dropped order {order.order_id} at {failed_robot.pos}")
             order.pickup_pos = failed_robot.pos
             order.assigned_to = None
             
             if not str(order.order_id).startswith("RESCUE_"):
                 order.order_id = f"RESCUE_{order.order_id}"
-        
-        else:
-            # Any other state (CHARGING, IDLE) - shouldn't have an order, but just in case
-            order.assigned_to = None
-            print(f"⚠️ Robot {failed_robot.unique_id} failed in unexpected state {old_state} with order {order.order_id}")
 
         failed_robot.current_order = None
         
+        # Immediate attempt to find a healthy robot to finish the job
         if self.model.coordination_type in ["cnp", "auction"]:
-            print(f"🔄 Attempting immediate reallocation of {order.order_id}...")
             unassigned = [order]
             if self.model.coordination_type == "cnp":
                 self.run_cnp_allocation(unassigned)
@@ -356,6 +365,7 @@ class OrderManagerAgent(mesa.Agent):
                 self.run_auction_allocation(unassigned)
 
     def create_new_order(self):
+        """ Spawns an order at a random shelf with a target packing station. """
         pickup = self.model.get_random_shelf()
         dropoff = self.model.get_random_packing_station()
         if pickup and dropoff:
@@ -363,8 +373,8 @@ class OrderManagerAgent(mesa.Agent):
             new_order = Order(self.next_order_id, pickup, dropoff, weight)
             self.next_order_id += 1
             self.orders.append(new_order)
-            print(f"📋 New order created: ID={new_order.order_id}, Weight={weight}, Pickup={pickup}")
             
+            # Change colors of the shelf and station so we can see which task is linked
             highlight_color = random.choice(VISUALIZATION_COLORS)
             cell_contents_pickup = self.model.grid.get_cell_list_contents(pickup)
             for agent in cell_contents_pickup:
@@ -376,6 +386,7 @@ class OrderManagerAgent(mesa.Agent):
                     agent.color = highlight_color
 
     def run_cnp_allocation(self, unassigned_orders):
+        """ Allocates tasks by awarding them to the agent with the highest bid. """
         idle_robots = [a for a in self.model.schedule.agents 
                       if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: 
@@ -391,10 +402,11 @@ class OrderManagerAgent(mesa.Agent):
             if valid_bids:
                 winner = max(valid_bids, key=valid_bids.get)
                 if self.assign_order_specifically(winner, order):
-                    print(f"🤝 CNP: Robot {winner.unique_id} (cap={winner.capacity}) won order {order.order_id} (weight={order.weight})")
+                    print(f"🤝 CNP: Robot {winner.unique_id} won order {order.order_id}")
                     idle_robots.remove(winner)
 
     def run_auction_allocation(self, unassigned_orders):
+        """ Allocates tasks by awarding them to the agent with the lowest cost. """
         idle_robots = [a for a in self.model.schedule.agents 
                       if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: 
@@ -410,10 +422,11 @@ class OrderManagerAgent(mesa.Agent):
             if valid_bids:
                 winner = min(valid_bids, key=valid_bids.get)
                 if self.assign_order_specifically(winner, order):
-                    print(f"💰 Auction: Robot {winner.unique_id} (cap={winner.capacity}) won order {order.order_id} (weight={order.weight})")
+                    print(f"💰 Auction: Robot {winner.unique_id} won order {order.order_id}")
                     idle_robots.remove(winner)
 
     def assign_order_specifically(self, robot, order):
+        """ Links the robot and order together. """
         if order.assigned_to is None:
             order.assigned_to = robot
             robot.current_order = order
@@ -429,8 +442,10 @@ class OrderManagerAgent(mesa.Agent):
         if order in self.orders:
             self.orders.remove(order)
 
+# --- Passive Environmental Agents ---
 
 class ShelfAgent(mesa.Agent):
+    """ Represents static warehouse shelving. Non-walkable. """
     def __init__(self, unique_id, model):
         super().__init__(model)
         self.type_name = "Shelf"
@@ -438,6 +453,7 @@ class ShelfAgent(mesa.Agent):
 
 
 class PackingStationAgent(mesa.Agent):
+    """ Represents the target destination for goods. Non-walkable. """
     def __init__(self, unique_id, model):
         super().__init__(model)
         self.type_name = "PackingStation"
@@ -445,6 +461,7 @@ class PackingStationAgent(mesa.Agent):
 
 
 class ChargingStationAgent(mesa.Agent):
+    """ Represents a location where robots can recover battery energy. Walkable by robots only. """
     def __init__(self, unique_id, model):
         super().__init__(model)
         self.type_name = "ChargingStation"

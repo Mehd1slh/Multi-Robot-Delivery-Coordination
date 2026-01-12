@@ -1,49 +1,64 @@
-# server.py
 import sys
 import os
 import solara
 
-# Fix path to allow importing local modules
+# Ensure the script can import local modules from the current directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import mesa
 from mesa.visualization import SolaraViz, make_space_component, make_plot_component
 
-# Local Imports
+# Local Imports: Environment agents and state constants for visualization
 from model import WarehouseModel
-from agents import RobotAgent, STATE_TO_DELIVER, STATE_TO_PICKUP, STATE_CHARGING, STATE_TO_CHARGE, LOW_BATTERY_THRESHOLD
+from agents import (
+    RobotAgent, 
+    STATE_TO_DELIVER, 
+    STATE_TO_PICKUP, 
+    STATE_CHARGING, 
+    STATE_TO_CHARGE, 
+    LOW_BATTERY_THRESHOLD
+)
 
 
-# VISUALIZATION LOGIC
+# --- VISUALIZATION LOGIC ---
 
 def agent_portrayal(agent):
+    """
+    Determines how each agent (Robot, Shelf, Station) is rendered in the web UI.
+    Returns a dictionary of visual properties.
+    """
     if agent is None: return {}
+    
+    # Default: Circular marker for mobile agents
     portrayal = {"size": 50, "marker": "o"}
 
     if isinstance(agent, RobotAgent):
-        # 1. Check FAILED state first and exclusively
+        # Priority 1: Visual feedback for critical failure (Mechanical breakdown)
         if agent.state == "FAILED": 
             portrayal["color"] = "red"
         
-        # 2. Change 'if' to 'elif' here to connect the chain
+        # Priority 2: Visual alert for low battery (needs charging)
         elif agent.battery < LOW_BATTERY_THRESHOLD:
             portrayal["color"] = "yellow"
             
+        # Standard States: Color-coded based on current task
         elif agent.state == STATE_TO_DELIVER:
-            portrayal["color"] = "green"
+            portrayal["color"] = "green"   # Carrying a package
         elif agent.state == STATE_TO_PICKUP:
-            portrayal["color"] = "blue"
+            portrayal["color"] = "blue"    # Moving to fetch a package
         elif agent.state == STATE_CHARGING:
-            portrayal["color"] = "yellow"
+            portrayal["color"] = "yellow"  # Currently at a station
         elif agent.state == STATE_TO_CHARGE:
-            portrayal["color"] = "orange"
+            portrayal["color"] = "orange"  # Heading to a station
         else:
-            portrayal["color"] = "grey"
+            portrayal["color"] = "grey"    # Idle or undefined
 
     elif hasattr(agent, "type_name"):
+        # Infrastructure: Rendered as larger squares
         portrayal["marker"] = "s" 
         portrayal["size"] = 80
         
+        # Use custom highlighted colors from the model if available, else defaults
         if hasattr(agent, "color"):
             portrayal["color"] = agent.color
         else:
@@ -57,8 +72,9 @@ def agent_portrayal(agent):
     return portrayal
 
 
-# MODEL PARAMETERS
+# --- UI MODEL PARAMETERS ---
 
+# Defines the sliders and dropdowns in the web sidebar to control simulation settings
 model_params = {
     "coordination_type": {
         "type": "Select",
@@ -85,26 +101,15 @@ model_params = {
 }
 
 
-# SERVER PAGE
-
-# Initialize with defaults matching model_params
-initial_model = WarehouseModel(n_robots=3, order_rate=0.08, coordination_type="cnp")
-
-page = SolaraViz(
-    model=initial_model,
-    components=[
-        make_space_component(agent_portrayal),
-        make_plot_component({"Throughput": "black"}),
-        make_plot_component({"Avg_Battery": "red"}),
-        make_plot_component({"Active_Robots": "green"}),
-    ],
-    model_params=model_params,
-    name="Multi-Robot Delivery System"
-)
+# --- CUSTOM UI COMPONENTS ---
 
 @solara.component
 def ManualFaultControls(model):
-    with solara.Sidebar(): # This forced the content into the left sidebar
+    """
+    Adds a custom section to the sidebar allowing the user to 
+    manually inject a robot failure for testing resilience.
+    """
+    with solara.Sidebar(): 
         with solara.Card("Manual Fault Injection"):
             solara.Button(
                 label="Fail Random Robot", 
@@ -113,21 +118,27 @@ def ManualFaultControls(model):
                 style={"width": "100%"}
             )
 
-# 2. Initialize the model
-initial_model = WarehouseModel(n_robots=3, order_rate=0.08, coordination_type="cnp")
 
-# 3. Create the visualization using the standard components list
+# --- SERVER PAGE INITIALIZATION ---
+
+# Create the initial model instance
+initial_model = WarehouseModel(n_robots=3, order_rate=0.1, coordination_type="cnp")
+
+# Assemble the Solara visualization page
 page = SolaraViz(
     model=initial_model,
     components=[
+        # 1. The 2D grid space view
         make_space_component(agent_portrayal),
-        ManualFaultControls,  # Added here, but the Sidebar() wrapper handles placement
         
-        # Metric monitoring graphs - keys must match reporters in model.py
-        make_plot_component({"Throughput": "black"}),
-        make_plot_component({"Total_Distance": "blue"}), 
-        make_plot_component({"Conflict_Rate": "red"}),
-        make_plot_component({"Fairness_Gini": "purple"}),
+        # 2. Custom sidebar button for manual failure
+        ManualFaultControls,
+        
+        # 3. Real-time metric monitoring graphs (linked to DataCollector in model.py)
+        make_plot_component({"Throughput": "black"}),      # Orders completed
+        make_plot_component({"Total_Distance": "blue"}),   # Energy cost / effort
+        make_plot_component({"Conflict_Rate": "red"}),     # Current failed robots
+        make_plot_component({"Fairness_Gini": "purple"}),  # Workload distribution
     ],
     model_params=model_params,
     name="Multi-Robot Delivery System"
