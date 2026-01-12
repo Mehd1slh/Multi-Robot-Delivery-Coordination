@@ -103,18 +103,31 @@ page = SolaraViz(
 )
 
 @solara.component
-def Controls(model):
-    with solara.Card("Manual Fault Injection"):
-        solara.Button(label="Fail Random Robot", on_click=model.fail_random_robot, color="error")
+def ManualFaultControls(model):
+    with solara.Sidebar(): # This forced the content into the left sidebar
+        with solara.Card("Manual Fault Injection"):
+            solara.Button(
+                label="Fail Random Robot", 
+                on_click=model.fail_random_robot, 
+                color="error",
+                style={"width": "100%"}
+            )
 
-# Update the SolaraViz call to include the new component
+# 2. Initialize the model
+initial_model = WarehouseModel(n_robots=3, order_rate=0.08, coordination_type="cnp")
+
+# 3. Create the visualization using the standard components list
 page = SolaraViz(
     model=initial_model,
     components=[
         make_space_component(agent_portrayal),
-        Controls, # Add the manual button here
+        ManualFaultControls,  # Added here, but the Sidebar() wrapper handles placement
+        
+        # Metric monitoring graphs - keys must match reporters in model.py
         make_plot_component({"Throughput": "black"}),
-        # ...
+        make_plot_component({"Total_Distance": "blue"}), 
+        make_plot_component({"Conflict_Rate": "red"}),
+        make_plot_component({"Fairness_Gini": "purple"}),
     ],
     model_params=model_params,
     name="Multi-Robot Delivery System"

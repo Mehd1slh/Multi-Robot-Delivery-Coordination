@@ -44,13 +44,12 @@ class RobotAgent(mesa.Agent):
         self.pos = None
         self.battery = BATTERY_CAPACITY
         self.state = STATE_IDLE
+        self.previous_state = None
         self.current_order = None
         self.orders_completed = 0
         self.distance_traveled = 0
         self.failure_timer = 0
         self.repairs_triggered = 0
-
-        # NEW: Random capacity assignment (20, 30, or 40)
         self.capacity = random.choice(ROBOT_CAPACITIES)
 
     def step(self):
@@ -61,7 +60,6 @@ class RobotAgent(mesa.Agent):
                 print(f"✅ Robot {self.unique_id} RECOVERED! Back to work.")
                 self.state = STATE_IDLE
                 self.battery = BATTERY_CAPACITY
-                self.vacate_station()
             return
 
         self.update_battery()
@@ -71,10 +69,13 @@ class RobotAgent(mesa.Agent):
             self.trigger_failure()
             return
         
-        # Low Battery Logic
-        if self.battery < LOW_BATTERY_THRESHOLD and self.state != STATE_CHARGING and self.state != STATE_TO_CHARGE:
+        # Low Battery Logic - preserve current order
+        if self.battery < LOW_BATTERY_THRESHOLD and self.state not in [STATE_CHARGING, STATE_TO_CHARGE, STATE_FAILED]:
+            if self.previous_state is None:
+                self.previous_state = self.state if self.state in [STATE_TO_PICKUP, STATE_TO_DELIVER] else STATE_IDLE
             self.state = STATE_TO_CHARGE
-        
+            print(f"🪫 Robot {self.unique_id} charging. Holding Order ID: {self.current_order.order_id if self.current_order else 'None'}")
+                
         # STATE MACHINE 
         if self.state == STATE_TO_PICKUP:
             if self.current_order:
@@ -93,6 +94,9 @@ class RobotAgent(mesa.Agent):
                     self.move_towards(target_access)
                     if self.pos == target_access:
                         self.complete_order()
+            else:
+                print(f"⚠️ Robot {self.unique_id} was in DELIVER state but current_order was missing!")
+                self.state = STATE_IDLE
 
         elif self.state == STATE_TO_CHARGE:
             target = self.get_nearest_charger()
@@ -108,30 +112,40 @@ class RobotAgent(mesa.Agent):
         elif self.state == STATE_IDLE:
             if self.model.coordination_type == "greedy":
                 self.behavior_greedy()
-            # In CNP/Auction, robots wait for manager to assign orders
-            # No active behavior needed here
 
     def trigger_failure(self):
         print(f"💥 Robot {self.unique_id} FAILED at {self.pos}! State was: {self.state}")
-        # CRITICAL FIX: Save the state BEFORE changing it to FAILED
         old_state = self.state
         self.state = STATE_FAILED
         self.failure_timer = RECOVERY_TIME
         self.repairs_triggered += 1
         if self.current_order:
-            # Notify manager to reallocate, passing the old state
             self.model.order_manager.handle_robot_failure(self, old_state)
     
     def vacate_station(self):
         """Finds the nearest walkable cell that isn't a charging station to unblock the queue."""
         neighbors = self.model.grid.get_neighborhood(self.pos, moore=False, include_center=False)
+        moved = False
+        
         for neighbor in neighbors:
-            # Check if neighbor is not a charging station and is walkable
             cell_contents = self.model.grid.get_cell_list_contents(neighbor)
             is_station = any(isinstance(c, ChargingStationAgent) for c in cell_contents)
             if not is_station and self.model.is_walkable(neighbor):
                 self.model.grid.move_agent(self, neighbor)
+                moved = True
                 break
+        
+        if not moved:
+            print(f"⚠️ Robot {self.unique_id} cannot vacate - no valid neighbor!")
+        
+        # Resume previous task if exists
+        if hasattr(self, 'previous_state') and self.previous_state:
+            self.state = self.previous_state
+            self.previous_state = None
+            print(f"🔄 Robot {self.unique_id} vacated and resumed {self.state} with order {self.current_order.order_id if self.current_order else 'None'}")
+        else:
+            self.state = STATE_IDLE
+            print(f"🔄 Robot {self.unique_id} vacated to IDLE")
 
     def reset_shelf_color(self, pos):
         if self.model.grid.out_of_bounds(pos): return
@@ -161,12 +175,10 @@ class RobotAgent(mesa.Agent):
         x, y = target_pos
         potential_access_points = [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]
         
-        # FIX: If I am already at a valid access point, stay there!
         if self.pos in potential_access_points:
             return self.pos
-        # FIX: Also check if I am standing ON the target (e.g. dropped package)
         if self.pos == target_pos:
-             return self.pos
+            return self.pos
 
         valid_points = [p for p in potential_access_points if self.model.is_walkable(p)]
         if not valid_points: return None 
@@ -234,16 +246,18 @@ class RobotAgent(mesa.Agent):
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
     def charge(self):
+        """Handle battery charging without changing state - vacate_station handles state resumption"""
         self.battery = min(self.battery + CHARGE_RATE, BATTERY_CAPACITY)
-        if self.battery == BATTERY_CAPACITY: self.state = STATE_IDLE
+        if self.battery == BATTERY_CAPACITY:
+            print(f"⚡ Robot {self.unique_id} fully charged. Will resume upon vacating.")
 
     def update_battery(self):
-        if self.state == STATE_IDLE: self.battery -= BATTERY_DRAIN_IDLE
+        if self.state == STATE_IDLE: 
+            self.battery -= BATTERY_DRAIN_IDLE
 
     def behavior_greedy(self):
         available_orders = self.model.order_manager.get_unassigned_orders()
         if not available_orders: return
-        # Filter orders that fit in this robot's capacity
         feasible_orders = [o for o in available_orders if o.weight <= self.capacity]
         if not feasible_orders: return
 
@@ -253,31 +267,32 @@ class RobotAgent(mesa.Agent):
             self.state = STATE_TO_PICKUP
 
     def calculate_cnp_bid(self, order):
-        # Checking capacity constraint
-        if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD: return -1
-        if order.weight > self.capacity: return -1  # Cannot carry this order
+        if self.current_order is not None:
+            return -1
+        if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD:
+            return -1
+        if order.weight > self.capacity:
+            return -1
         
         dist = self.calculate_distance(order.pickup_pos)
         base_score = (self.battery * 0.5) - (dist * 2.0)
-
-        # We penalize using a big capacity robot for a small package
         wasted_space = self.capacity - order.weight
         penalty = wasted_space * 1.0 
         
         return max(0, base_score - penalty)
 
     def calculate_auction_bid(self, order):
-        # Checking capacity constraint
-        if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD: return float('inf')
-        if order.weight > self.capacity: return float('inf') # Cost is infinite if I can't carry it
+        if self.current_order is not None:
+            return float('inf')
+        if self.state != STATE_IDLE or self.battery < LOW_BATTERY_THRESHOLD:
+            return float('inf')
+        if order.weight > self.capacity:
+            return float('inf')
         
         dist = self.calculate_distance(order.pickup_pos)
-
-        # In auctions, "Bid" usually represents "Cost". Wasting space is an "extra cost" to the system.
         wasted_space = self.capacity - order.weight
         opportunity_cost = wasted_space * 1.0
         
-        # Total Cost = Distance + Battery Pain + Opportunity Cost
         return dist + ((BATTERY_CAPACITY - self.battery) * 0.1) + opportunity_cost
 
     def calculate_distance(self, target):
@@ -289,24 +304,20 @@ class OrderManagerAgent(mesa.Agent):
         super().__init__(model)
         self.orders = []
         self.completed_orders = 0
-        self.next_order_id = 0  # FIX: Track next ID separately
+        self.next_order_id = 0
 
     def step(self):
-        # Randomly create new orders
         if random.random() < self.model.order_rate: 
             self.create_new_order()
             
-        # CRITICAL FIX: Always try to allocate ALL unassigned orders, not just new ones
         unassigned = self.get_unassigned_orders()
         if not unassigned: 
             return
             
-        # Run allocation based on coordination type
         if self.model.coordination_type == "cnp": 
             self.run_cnp_allocation(unassigned)
         elif self.model.coordination_type == "auction": 
             self.run_auction_allocation(unassigned)
-        # Note: "greedy" mode doesn't need manager allocation - robots do it themselves
 
     def handle_robot_failure(self, failed_robot, old_state):
         """Handle robot failure and reassign its order"""
@@ -315,30 +326,30 @@ class OrderManagerAgent(mesa.Agent):
             return
         
         if old_state == "TO_PICKUP":
-            # Robot hadn't picked it up yet; just unassign it
+            # Robot was going to pick up but failed - just release the order
             order.assigned_to = None
             print(f"🔄 Robot {failed_robot.unique_id} failed before pickup. Order {order.order_id} re-released.")
             
-        elif old_state == "TO_DELIVER":
-            # Robot dropped the package! Update the order's pickup position
+        elif old_state in ["TO_DELIVER", "TO_CHARGE"]:
+            # Robot had the package (either delivering or going to charge with it)
+            # The package is dropped at the failure location
             print(f"🚨 PACKAGE DROPPED! Robot {failed_robot.unique_id} dropped order {order.order_id} at {failed_robot.pos}")
+            order.pickup_pos = failed_robot.pos
+            order.assigned_to = None
             
-            # Update the existing order rather than creating a new one
-            order.pickup_pos = failed_robot.pos  # Package is now at robot's failure location
-            order.assigned_to = None  # Unassign so it can be picked up again
-            
-            # Update the order_id to show it's a rescue
             if not str(order.order_id).startswith("RESCUE_"):
                 order.order_id = f"RESCUE_{order.order_id}"
+        
+        else:
+            # Any other state (CHARGING, IDLE) - shouldn't have an order, but just in case
+            order.assigned_to = None
+            print(f"⚠️ Robot {failed_robot.unique_id} failed in unexpected state {old_state} with order {order.order_id}")
 
-        # Clear the failed robot's memory of the order
         failed_robot.current_order = None
         
-        # IMPORTANT: Trigger immediate reallocation attempt for CNP/Auction
-        # This ensures the order gets picked up in the same step if possible
         if self.model.coordination_type in ["cnp", "auction"]:
             print(f"🔄 Attempting immediate reallocation of {order.order_id}...")
-            unassigned = [order]  # Just this one order
+            unassigned = [order]
             if self.model.coordination_type == "cnp":
                 self.run_cnp_allocation(unassigned)
             elif self.model.coordination_type == "auction":
@@ -349,28 +360,29 @@ class OrderManagerAgent(mesa.Agent):
         dropoff = self.model.get_random_packing_station()
         if pickup and dropoff:
             weight = random.randint(MIN_PACKAGE_WEIGHT, MAX_PACKAGE_WEIGHT)
-            new_order = Order(self.next_order_id, pickup, dropoff, weight)  # FIX: Use counter
-            self.next_order_id += 1  # FIX: Increment counter
+            new_order = Order(self.next_order_id, pickup, dropoff, weight)
+            self.next_order_id += 1
             self.orders.append(new_order)
             print(f"📋 New order created: ID={new_order.order_id}, Weight={weight}, Pickup={pickup}")
             
             highlight_color = random.choice(VISUALIZATION_COLORS)
-            # Highlight pickup
             cell_contents_pickup = self.model.grid.get_cell_list_contents(pickup)
             for agent in cell_contents_pickup:
-                if isinstance(agent, ShelfAgent): agent.color = highlight_color
-            # Highlight dropoff
+                if isinstance(agent, ShelfAgent): 
+                    agent.color = highlight_color
             cell_contents_dropoff = self.model.grid.get_cell_list_contents(dropoff)
             for agent in cell_contents_dropoff:
-                if isinstance(agent, PackingStationAgent): agent.color = highlight_color
+                if isinstance(agent, PackingStationAgent): 
+                    agent.color = highlight_color
 
     def run_cnp_allocation(self, unassigned_orders):
-        idle_robots = [a for a in self.model.schedule.agents if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
+        idle_robots = [a for a in self.model.schedule.agents 
+                      if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: 
             return
             
         for order in unassigned_orders:
-            if not idle_robots:  # No more robots available
+            if not idle_robots:
                 break
                 
             bids = {r: r.calculate_cnp_bid(order) for r in idle_robots}
@@ -383,12 +395,13 @@ class OrderManagerAgent(mesa.Agent):
                     idle_robots.remove(winner)
 
     def run_auction_allocation(self, unassigned_orders):
-        idle_robots = [a for a in self.model.schedule.agents if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
+        idle_robots = [a for a in self.model.schedule.agents 
+                      if isinstance(a, RobotAgent) and a.state == STATE_IDLE]
         if not idle_robots: 
             return
             
         for order in unassigned_orders:
-            if not idle_robots:  # No more robots available
+            if not idle_robots:
                 break
                 
             bids = {r: r.calculate_auction_bid(order) for r in idle_robots}
@@ -413,9 +426,9 @@ class OrderManagerAgent(mesa.Agent):
     
     def report_completion(self, order): 
         self.completed_orders += 1
-        # Remove the order from the list once completed
         if order in self.orders:
             self.orders.remove(order)
+
 
 class ShelfAgent(mesa.Agent):
     def __init__(self, unique_id, model):
@@ -423,11 +436,13 @@ class ShelfAgent(mesa.Agent):
         self.type_name = "Shelf"
         self.color = "brown" 
 
+
 class PackingStationAgent(mesa.Agent):
     def __init__(self, unique_id, model):
         super().__init__(model)
         self.type_name = "PackingStation"
         self.color = "black" 
+
 
 class ChargingStationAgent(mesa.Agent):
     def __init__(self, unique_id, model):

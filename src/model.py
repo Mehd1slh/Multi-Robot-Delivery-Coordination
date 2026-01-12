@@ -20,23 +20,32 @@ def get_total_distance(model):
     return sum([agent.distance_traveled for agent in model.robot_agents])
 
 class WarehouseModel(mesa.Model):
-    def __init__(self, coordination_type="cnp", n_robots=NUM_ROBOTS, order_rate=0.08, failure_step=-1):
+    def __init__(self, coordination_type="cnp", n_robots=NUM_ROBOTS, order_rate=0.08, failure_step=-1, map_data=None):
         super().__init__()
         self.coordination_type = coordination_type 
         self.num_robots = n_robots
         self.order_rate = order_rate
         self.running = True
         self.failure_step = failure_step # -1 means no scheduled failure 
-        
-        self.grid = mesa.space.MultiGrid(GRID_WIDTH, GRID_HEIGHT, torus=False)
         self.schedule = mesa.time.RandomActivation(self)
+
+        # Use dimensions from map or defaults
+        self.width = map_data.get("width", GRID_WIDTH) if map_data else GRID_WIDTH
+        self.height = map_data.get("height", GRID_HEIGHT) if map_data else GRID_HEIGHT
         
+        self.grid = mesa.space.MultiGrid(self.width, self.height, torus=False)
+        
+        # Initialize lists
         self.robot_agents = []
         self.shelves = []
         self.packing_stations = []
         self.charging_stations = []
         
-        self._init_warehouse_layout()
+        # FIXED: Only call ONE layout initialization method
+        if map_data:
+            self._load_custom_layout(map_data)
+        else:
+            self._init_warehouse_layout()
         
         self.order_manager = OrderManagerAgent(999, self)
         self.schedule.add(self.order_manager)
@@ -48,8 +57,8 @@ class WarehouseModel(mesa.Model):
                 "Throughput": lambda m: m.order_manager.completed_orders,
                 "Conflict_Rate": lambda m: m._get_conflict_rate(),
                 "Idle_Time": lambda m: self._get_idle_time(),
-                "Total_Distance": get_total_distance, # Efficiency
-                "Fairness_Gini": compute_gini         # Fairness
+                "Total_Distance": get_total_distance,
+                "Fairness_Gini": compute_gini
             },
             agent_reporters={
                 "Battery": lambda a: a.battery if isinstance(a, RobotAgent) else None,
@@ -88,6 +97,23 @@ class WarehouseModel(mesa.Model):
             charger = ChargingStationAgent(f"Charge_{i}", self)
             self.grid.place_agent(charger, pos)
 
+    def _load_custom_layout(self, data):
+        """Places agents based on a dictionary saved by the map editor."""
+        for x, y in data["shelves"]:
+            shelf = ShelfAgent(f"Shelf_{x}_{y}", self)
+            self.grid.place_agent(shelf, (x, y))
+            self.shelves.append((x, y))
+            
+        for x, y in data["packing_stations"]:
+            station = PackingStationAgent(f"Pack_{x}_{y}", self)
+            self.grid.place_agent(station, (x, y))
+            self.packing_stations.append((x, y))
+            
+        for x, y in data["charging_stations"]:
+            charger = ChargingStationAgent(f"Charge_{x}_{y}", self)
+            self.grid.place_agent(charger, (x, y))
+            self.charging_stations.append((x, y))
+
     def _init_robots(self):
         for i in range(self.num_robots):
             pos = self.get_random_free_cell()
@@ -104,13 +130,10 @@ class WarehouseModel(mesa.Model):
         for agent in cell_contents:
             if isinstance(agent, (ShelfAgent, PackingStationAgent)):
                 return False
-            # Robots are obstacles if they are at that position
             if isinstance(agent, RobotAgent):
-                # If you want active robots to pass each other, keep the original check.
-                # To treat FAILED robots as hard obstacles:
                 if agent.state == "FAILED":
                     return False
-                return False # Keeping your original logic where any robot is an obstacle
+                return False
 
         return True
 
